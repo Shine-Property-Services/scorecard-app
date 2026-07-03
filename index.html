@@ -123,18 +123,40 @@
 const RAW = (typeof window.SCORECARD_DATA === 'object' && window.SCORECARD_DATA) ? window.SCORECARD_DATA : null;
 let DATA = RAW || { tech:[], sales:[], syncedAt:null };
 
+// ---------- roster (mirrors the payroll system: only "tech" role shows on the Technician tab) ----------
+const ROSTER = {
+  "Caleb Mcpherson":"tech","Jared Nelson":"tech","Julian Ryan":"tech","Alexis Gaudreault":"tech",
+  "Brayden Rougeau":"tech","Camerin Luxton":"tech","Chayce Vanden-Brink":"tech","Elijah Good":"tech",
+  "Jackson Powell":"sales","Thomas Beames":"sales","Eric Spies":"sales"
+};
+const TECHS = Object.keys(ROSTER).filter(n=>ROSTER[n]==='tech');
+const isTech = n => ROSTER[normName(n)]==='tech';
+
 // ---------- config (editable; persisted) ----------
 const DEFAULTS = {
-  hourlyRate: 32.5,          // "Base Pay - All in" = hours x this (reverse-engineered from the sheet)
-  commissionPct: 0.17,       // Com $ = 17% of revenue over target
-  target: { "Victoria": 6500, "Prince George": 6000 }, // full-week (5-day) revenue target, pro-rated by days
-  laborWarn: 0.60            // flag labor % above this
+  rateMode: 'location',                                  // 'location' or 'employee'
+  rateLoc:  { "Victoria": 32.5, "Prince George": 32.5 }, // base pay "all in" $/hr by unit
+  rateEmp:  {},                                          // { "Caleb Mcpherson": 34, ... } per-employee overrides
+  commissionPct: { "Victoria": 0.20, "Prince George": 0.175 }, // matches payroll (20% Vic / 17.5% PG)
+  target: { "Victoria": 6500, "Prince George": 6000 },   // full-week (5-day) revenue target, pro-rated by days
+  laborWarn: 0.60
 };
 function lsGet(k,f){ try{ const v=localStorage.getItem(k); return v==null?f:JSON.parse(v); }catch(e){ return f; } }
 function lsSet(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(e){} }
-let CFG = Object.assign({}, DEFAULTS, lsGet('shine_score_cfg', {}));
+let CFG = Object.assign({}, JSON.parse(JSON.stringify(DEFAULTS)), lsGet('shine_score_cfg', {}));
 CFG.target = Object.assign({}, DEFAULTS.target, CFG.target||{});
-let SPEND = lsGet('shine_score_spend', {});   // { "week|unit": dollars } manual ad spend for Marketing
+CFG.rateLoc = Object.assign({}, DEFAULTS.rateLoc, CFG.rateLoc||{});
+CFG.rateEmp = Object.assign({}, CFG.rateEmp||{});
+if(typeof CFG.commissionPct==='number') CFG.commissionPct={...DEFAULTS.commissionPct}; // migrate old flat value
+CFG.commissionPct = Object.assign({}, DEFAULTS.commissionPct, CFG.commissionPct||{});
+function rateFor(name,unit){
+  if(CFG.rateMode==='employee'){ const r=CFG.rateEmp[normName(name)]; if(r!=null&&r!=='') return +r; }
+  return +CFG.rateLoc[unit] || 0;
+}
+const comPctFor = unit => (CFG.commissionPct[unit]!=null ? CFG.commissionPct[unit] : 0.17);
+// Normalize a lead source for display grouping (anything with "facebook" -> Facebook). Sync already normalizes; this is a safety net.
+function normSource(s){ const x=(s||'').toLowerCase(); if(/faceb|\bfb\b|meta|instagram/.test(x)) return 'Facebook'; if(/knock|door|self.?gen/.test(x)) return 'Door knocking'; if(/google|ppc|adwords/.test(x)) return 'Google'; if(/website|web|organic|form|landing/.test(x)) return 'Website'; if(/referr|word of mouth|repeat/.test(x)) return 'Referral'; if(!x.trim()) return 'Unknown'; return s; }
+let SPEND = lsGet('shine_score_spend', {});   // { "week|unit|source": dollars } manual ad spend for Marketing
 
 // ---------- helpers ----------
 const $=s=>document.querySelector(s);
@@ -156,17 +178,17 @@ function techCalc(r){
   const target = days>0 ? full*Math.min(days,5)/5 : 0;
   const spread = revenue - target;
   const comRev = Math.max(spread,0);
-  const comDollars = comRev*CFG.commissionPct;
-  const basePay = hours*CFG.hourlyRate;
+  const comDollars = comRev*comPctFor(r.unit);
+  const basePay = hours*rateFor(r.name,r.unit);
   const totalPay = basePay+comDollars+tips;
   const laborPct = revenue>0 ? totalPay/revenue : null;
   return {...r,days,hours,revenue,tips,target,spread,comRev,comDollars,basePay,totalPay,laborPct};
 }
 function salesCalc(r){
-  const closeRate = r.quotesSent>0 ? r.jobsBooked/r.quotesSent : null;
+  const closeRate = r.quotesSent>0 ? r.jobsBooked/r.quotesSent : null;   // booked / quotes sent
+  const convRate  = r.leads>0 ? r.quotesSent/r.leads : null;             // quotes sent / leads
   const avgTicket = r.jobsBooked>0 ? r.revenueSold/r.jobsBooked : null;
-  const cpl = 0; // set in marketing with spend
-  return {...r, closeRate, avgTicket};
+  return {...r, closeRate, convRate, avgTicket};
 }
 
 const weeks = ()=>[...new Set([...(DATA.tech||[]).map(r=>r.week), ...(DATA.sales||[]).map(r=>r.week)])].filter(Boolean).sort();
@@ -178,11 +200,15 @@ const NON_TECH = new Set(['josh yuvienco','joyce yuvienco','craig macdonald','ja
 const normName = n => (n||'').replace(/\s+/g,' ').trim();          // "Thomas  Beames" -> "Thomas Beames"
 const HOURS_MAX = 80;                                              // above this a weekly timesheet is almost certainly a missed clock-out
 // Technician rows, merged by normalized name so double-space duplicates collapse.
-function techBase(unit){
+// onlyTechs=true -> only roster technicians (Technician tab). false -> all production
+// staff except owners (used for Regional total production = all scheduled jobs).
+function techBase(unit, onlyTechs=true){
   const acc={};
   for(const r of (DATA.tech||[])){
     if(!r.unit) continue;
-    const nm=normName(r.name); if(NON_TECH.has(nm.toLowerCase())) continue;
+    const nm=normName(r.name);
+    if(onlyTechs){ if(!isTech(nm)) continue; }
+    else { if(NON_TECH.has(nm.toLowerCase())) continue; }
     if(!units(unit).includes(r.unit)) continue;
     const k=r.week+'|'+r.unit+'|'+nm;
     if(!acc[k]) acc[k]={week:r.week,unit:r.unit,name:nm,days:0,hours:0,revenue:0,tips:0};
@@ -253,61 +279,73 @@ function viewSales(){
   const rows=salesRowsFor(unit,week);
   const tLeads=rows.reduce((s,r)=>s+ (+r.leads||0),0), tQ=rows.reduce((s,r)=>s+(+r.quotesSent||0),0);
   const tJobs=rows.reduce((s,r)=>s+(+r.jobsBooked||0),0), tRev=rows.reduce((s,r)=>s+(+r.revenueSold||0),0);
-  const close=tQ>0?tJobs/tQ:null, avg=tJobs>0?tRev/tJobs:null;
+  const close=tQ>0?tJobs/tQ:null, avg=tJobs>0?tRev/tJobs:null, conv=tLeads>0?tQ/tLeads:null;
   let html=`<div class="grid">
     ${card('Revenue sold',money(tRev), week==='all'?'all weeks':fmtWeekY(week))}
     ${card('Leads',tLeads,'from GHL')}
-    ${card('Quotes sent',tQ)}
+    ${card('Conversion',pct(conv),'quotes sent ÷ leads')}
     ${card('Close rate',pct(close),'booked ÷ quotes sent')}
     ${card('Avg ticket',money(avg),'revenue ÷ jobs booked')}
   </div>`;
   html+=`<div class="tblwrap"><table><thead><tr>
     <th class="l">Week</th>${unit==='all'?'<th class="l">Unit</th>':''}
-    <th>Leads</th><th>Quotes sent</th><th>Jobs booked</th><th>Close %</th><th>Revenue sold</th><th>Avg ticket</th>
+    <th>Leads</th><th>Quotes sent</th><th>Conversion %</th><th>Jobs booked</th><th>Close %</th><th>Revenue sold</th><th>Avg ticket</th>
     </tr></thead><tbody>`;
   for(const r of rows){
     html+=`<tr><td class="l">${fmtWeek(r.week)}</td>${unit==='all'?`<td class="l">${uTag(r.unit)}</td>`:''}
-      <td>${r.leads||'—'}</td><td>${r.quotesSent||'—'}</td><td>${r.jobsBooked||'—'}</td>
+      <td>${r.leads||'—'}</td><td>${r.quotesSent||'—'}</td><td>${pct(r.convRate)}</td><td>${r.jobsBooked||'—'}</td>
       <td>${pct(r.closeRate)}</td><td>${money(r.revenueSold)}</td><td>${money(r.avgTicket)}</td></tr>`;
   }
   html+=`</tbody><tfoot><tr><td class="l">Total</td>${unit==='all'?'<td></td>':''}
-    <td>${tLeads}</td><td>${tQ}</td><td>${tJobs}</td><td>${pct(close)}</td><td>${money(tRev)}</td><td>${money(avg)}</td></tr></tfoot></table></div>`;
+    <td>${tLeads}</td><td>${tQ}</td><td>${pct(conv)}</td><td>${tJobs}</td><td>${pct(close)}</td><td>${money(tRev)}</td><td>${money(avg)}</td></tr></tfoot></table></div>`;
   return html;
 }
 
 function viewMarketing(){
   const {unit,week}=state();
-  const rows=salesRowsFor(unit,'all').filter(r=> week==='all'?true:r.week===week);
-  let tSpend=0,tLeads=0,tRev=0,tClosed=0;
-  let body='';
-  for(const r of rows){
-    const key=r.week+'|'+r.unit; const spend=+SPEND[key]||0;
-    const cpl= r.leads>0 && spend>0 ? spend/r.leads : null;
-    const roi= spend>0 ? r.revenueSold/spend : null;
-    const cac= r.jobsBooked>0 && spend>0 ? spend/r.jobsBooked : null;
-    const avgDeal= r.jobsBooked>0 ? r.revenueSold/r.jobsBooked : null;
-    tSpend+=spend; tLeads+=(+r.leads||0); tRev+=(+r.revenueSold||0); tClosed+=(+r.jobsBooked||0);
-    body+=`<tr><td class="l">${fmtWeek(r.week)}</td>${unit==='all'?`<td class="l">${uTag(r.unit)}</td>`:''}
-      <td>${r.leads||'—'}</td>
-      <td><input class="spend" type="number" min="0" step="1" data-key="${key}" value="${spend||''}" placeholder="0"></td>
-      <td>${money(cpl)}</td><td>${r.jobsBooked||'—'}</td><td>${money(r.revenueSold)}</td>
-      <td>${money(avgDeal)}</td><td>${roi==null?'—':roi.toFixed(2)+'×'}</td><td>${money(cac)}</td></tr>`;
+  let src=(DATA.marketing||[]).filter(r=>units(unit).includes(r.unit));
+  if(week!=='all') src=src.filter(r=>r.week===week);
+  // group by unit + lead source
+  const g={};
+  for(const r of src){
+    const s=normSource(r.source), k=r.unit+'|'+s;
+    if(!g[k]) g[k]={unit:r.unit,source:s,leads:0,quotesSent:0,closed:0,revenue:0,spend:0};
+    g[k].leads+=(+r.leads||0); g[k].quotesSent+=(+r.quotesSent||0); g[k].closed+=(+r.closed||0); g[k].revenue+=(+r.revenue||0);
   }
-  const cplT=tLeads>0&&tSpend>0?tSpend/tLeads:null, roiT=tSpend>0?tRev/tSpend:null, cacT=tClosed>0&&tSpend>0?tSpend/tClosed:null;
-  let html=`<div class="infobar">Ad spend isn't in Jobber or GHL, so enter it per week below (it saves in your browser). Cost-per-lead, ROI and CAC calculate automatically once spend is filled in. Leads, revenue and closed deals come straight from the live data.</div>`;
+  const spendKeys=(u,s)=>Object.keys(SPEND).filter(k=>{const p=k.split('|');return p[1]===u&&p[2]===s;});
+  Object.values(g).forEach(row=>{
+    row.spend = week!=='all' ? (+SPEND[week+'|'+row.unit+'|'+row.source]||0)
+                             : spendKeys(row.unit,row.source).reduce((a,k)=>a+(+SPEND[k]||0),0);
+  });
+  const rows=Object.values(g).sort((a,b)=> a.unit.localeCompare(b.unit) || b.leads-a.leads);
+  let tSpend=0,tLeads=0,tQ=0,tRev=0,tClosed=0, body='';
+  for(const r of rows){
+    const conv=r.leads>0?r.quotesSent/r.leads:null, cpl=r.leads>0&&r.spend>0?r.spend/r.leads:null;
+    const roi=r.spend>0?r.revenue/r.spend:null, cac=r.closed>0&&r.spend>0?r.spend/r.closed:null;
+    tSpend+=r.spend;tLeads+=r.leads;tQ+=r.quotesSent;tRev+=r.revenue;tClosed+=r.closed;
+    const spendCell = week!=='all'
+      ? `<input class="spend" type="number" min="0" step="1" data-key="${week+'|'+r.unit+'|'+r.source}" value="${r.spend||''}" placeholder="0">`
+      : (r.spend>0?money(r.spend):'<span class="muted" title="Pick a specific week to enter spend">—</span>');
+    body+=`<tr>${unit==='all'?`<td class="l">${uTag(r.unit)}</td>`:''}<td class="l">${r.source}</td>
+      <td>${r.leads||'—'}</td><td>${r.quotesSent||'—'}</td><td>${pct(conv)}</td><td>${r.closed||'—'}</td>
+      <td>${money(r.revenue)}</td><td>${spendCell}</td><td>${money(cpl)}</td>
+      <td>${roi==null?'—':roi.toFixed(2)+'×'}</td><td>${money(cac)}</td></tr>`;
+  }
+  const convT=tLeads>0?tQ/tLeads:null, cplT=tLeads>0&&tSpend>0?tSpend/tLeads:null, roiT=tSpend>0?tRev/tSpend:null, cacT=tClosed>0&&tSpend>0?tSpend/tClosed:null;
+  let html=`<div class="infobar">Broken down by <b>lead source</b> (anything containing “Facebook” is grouped together). Leads, quotes sent and closed come from <b>GHL</b>; revenue is from <b>Jobber</b> approved quotes by the lead source it tags. Ad spend isn't in either system — ${week==='all'?'pick a specific week to enter it':'enter it per source below'} (saved in your browser); CPL, ROI and CAC then calculate automatically.</div>`;
   html+=`<div class="grid">
-    ${card('Ad spend',money(tSpend), week==='all'?'entered, all weeks':fmtWeekY(week))}
-    ${card('Revenue',money(tRev))}
+    ${card('Leads',tLeads, week==='all'?'all weeks':fmtWeekY(week))}
+    ${card('Conversion',pct(convT),'quotes sent ÷ leads')}
+    ${card('Ad spend',money(tSpend))}
     ${card('ROI', roiT==null?'—':roiT.toFixed(2)+'×','revenue ÷ spend', roiT>=3?'good':(roiT!=null?'bad':''))}
     ${card('Cost per lead',money(cplT))}
-    ${card('CAC',money(cacT),'spend ÷ closed')}
   </div>`;
   html+=`<div class="tblwrap"><table><thead><tr>
-    <th class="l">Week</th>${unit==='all'?'<th class="l">Unit</th>':''}
-    <th>Leads</th><th>Ad spend</th><th>CPL</th><th>Closed</th><th>Revenue</th><th>Avg deal</th><th>ROI</th><th>CAC</th>
-    </tr></thead><tbody>${body}</tbody>
-    <tfoot><tr><td class="l">Total</td>${unit==='all'?'<td></td>':''}<td>${tLeads}</td><td>${money(tSpend)}</td><td>${money(cplT)}</td>
-    <td>${tClosed}</td><td>${money(tRev)}</td><td></td><td>${roiT==null?'—':roiT.toFixed(2)+'×'}</td><td>${money(cacT)}</td></tr></tfoot></table></div>`;
+    ${unit==='all'?'<th class="l">Unit</th>':''}<th class="l">Lead source</th>
+    <th>Leads</th><th>Quotes sent</th><th>Conversion %</th><th>Closed</th><th>Revenue</th><th>Ad spend</th><th>CPL</th><th>ROI</th><th>CAC</th>
+    </tr></thead><tbody>${body||`<tr><td colspan="11" class="muted" style="text-align:center;padding:18px">No lead data for this selection.</td></tr>`}</tbody>
+    <tfoot><tr>${unit==='all'?'<td></td>':''}<td class="l">Total</td><td>${tLeads}</td><td>${tQ}</td><td>${pct(convT)}</td><td>${tClosed}</td>
+    <td>${money(tRev)}</td><td>${money(tSpend)}</td><td>${money(cplT)}</td><td>${roiT==null?'—':roiT.toFixed(2)+'×'}</td><td>${money(cacT)}</td></tr></tfoot></table></div>`;
   return html;
 }
 
@@ -315,17 +353,22 @@ function viewRegional(){
   const {unit}=state();
   // monthly rollup per unit: production revenue (tech), targets, leads, closed jobs, close rate, avg ticket, labor%
   const map={}; // key month|unit
-  techBase('all').forEach(r=>{ const c=techCalc(r); const k=monthOf(r.week)+'|'+r.unit; (map[k]=map[k]||{month:monthOf(r.week),ws:r.week,unit:r.unit,rev:0,target:0,pay:0,leads:0,jobs:0,sold:0,quotes:0}); map[k].rev+=c.revenue; map[k].target+=c.target; map[k].pay+=c.totalPay; });
-  (DATA.sales||[]).forEach(r=>{ const k=monthOf(r.week)+'|'+r.unit; (map[k]=map[k]||{month:monthOf(r.week),ws:r.week,unit:r.unit,rev:0,target:0,pay:0,leads:0,jobs:0,sold:0,quotes:0}); map[k].leads+=(+r.leads||0); map[k].jobs+=(+r.jobsBooked||0); map[k].sold+=(+r.revenueSold||0); map[k].quotes+=(+r.quotesSent||0); });
+  const mk=(w,u)=>{ const k=monthOf(w)+'|'+u; return (map[k]=map[k]||{month:monthOf(w),ws:w,unit:u,rev:0,target:0,pay:0,rrev:0,leads:0,jobs:0,sold:0,quotes:0}); };
+  // production revenue = ALL scheduled jobs (every producer except owners)
+  techBase('all',false).forEach(r=>{ mk(r.week,r.unit).rev += (+r.revenue||0); });
+  // targets / pay / labor% based on roster technicians
+  techBase('all',true).forEach(r=>{ const c=techCalc(r); const m=mk(r.week,r.unit); m.target+=c.target; m.pay+=c.totalPay; m.rrev+=c.revenue; });
+  // revenue sold = approved quotes (Jobber), + leads/closed
+  (DATA.sales||[]).forEach(r=>{ const m=mk(r.week,r.unit); m.leads+=(+r.leads||0); m.jobs+=(+r.jobsBooked||0); m.sold+=(+r.revenueSold||0); m.quotes+=(+r.quotesSent||0); });
   let rows=Object.values(map).filter(m=>units(unit).includes(m.unit));
   rows.sort((a,b)=> (new Date(b.ws))-(new Date(a.ws)) || a.unit.localeCompare(b.unit));
-  let html=`<div class="infobar">Monthly rollup, auto-calculated from the weekly Technician & Sales data. “Revenue” is production (jobs done); “Revenue sold” is booked quotes.</div>`;
+  let html=`<div class="infobar">Monthly rollup, auto-calculated from the weekly data. <b>Production revenue</b> = scheduled jobs completed; <b>revenue sold</b> = approved quotes. Labor % is technician pay ÷ technician production.</div>`;
   html+=`<div class="tblwrap"><table><thead><tr>
     <th class="l">Month</th><th class="l">Unit</th><th>Production rev</th><th>Target</th><th>vs target</th>
     <th>Leads</th><th>Closed jobs</th><th>Close %</th><th>Revenue sold</th><th>Avg ticket</th><th>Labor %</th>
     </tr></thead><tbody>`;
   for(const m of rows){
-    const vs=m.rev-m.target, close=m.quotes>0?m.jobs/m.quotes:null, avg=m.jobs>0?m.sold/m.jobs:null, labor=m.rev>0?m.pay/m.rev:null;
+    const vs=m.rev-m.target, close=m.quotes>0?m.jobs/m.quotes:null, avg=m.jobs>0?m.sold/m.jobs:null, labor=m.rrev>0?m.pay/m.rrev:null;
     html+=`<tr><td class="l">${m.month}</td><td class="l">${uTag(m.unit)}</td>
       <td>${money(m.rev)}</td><td class="muted">${money(m.target)}</td><td class="${vs>=0?'pos':'neg'}">${money(vs)}</td>
       <td>${m.leads||'—'}</td><td>${m.jobs||'—'}</td><td>${pct(close)}</td><td>${money(m.sold)}</td><td>${money(avg)}</td>
@@ -336,16 +379,27 @@ function viewRegional(){
 }
 
 function viewSettings(){
+  const empRows = TECHS.map(n=>`<div class="frow"><label>${n}</label><input type="number" class="cfg-emp" data-name="${n}" step="0.5" value="${CFG.rateEmp[n]!=null?CFG.rateEmp[n]:''}" placeholder="uses location rate"> $/hr</div>`).join('');
   return `<div class="panel"><h3>Scorecard assumptions</h3>
     <p class="muted" style="margin-top:0">These aren't in Jobber/GHL, so set them here. They drive Target, Base pay, Commission and Labor % across every view. Saved in your browser.</p>
-    <div class="frow"><label>Hourly rate (base pay “all in”)</label><input type="number" id="cfg-rate" step="0.5" value="${CFG.hourlyRate}"></div>
-    <div class="frow"><label>Commission % (of revenue over target)</label><input type="number" id="cfg-com" step="1" value="${Math.round(CFG.commissionPct*100)}"> %</div>
+    <div class="frow"><label>Hourly rate (base pay “all in”) by</label>
+      <select id="cfg-ratemode"><option value="location"${CFG.rateMode==='location'?' selected':''}>Location</option><option value="employee"${CFG.rateMode==='employee'?' selected':''}>Per employee</option></select></div>
+    <div id="rate-location" class="${CFG.rateMode==='employee'?'hidden':''}">
+      <div class="frow"><label>&nbsp;&nbsp;Victoria rate</label><input type="number" id="cfg-rv" step="0.5" value="${CFG.rateLoc['Victoria']}"> $/hr</div>
+      <div class="frow"><label>&nbsp;&nbsp;Prince George rate</label><input type="number" id="cfg-rp" step="0.5" value="${CFG.rateLoc['Prince George']}"> $/hr</div>
+    </div>
+    <div id="rate-employee" class="${CFG.rateMode==='location'?'hidden':''}">
+      <p class="muted" style="margin:4px 0">Per-technician rate (blank = fall back to that unit's location rate):</p>${empRows}
+    </div>
+    <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
+    <div class="frow"><label>Commission % — Victoria</label><input type="number" id="cfg-cv" step="0.5" value="${+(CFG.commissionPct['Victoria']*100).toFixed(1)}"> %</div>
+    <div class="frow"><label>Commission % — Prince George</label><input type="number" id="cfg-cp" step="0.5" value="${+(CFG.commissionPct['Prince George']*100).toFixed(1)}"> %</div>
     <div class="frow"><label>Victoria weekly target (5-day)</label><input type="number" id="cfg-tv" step="100" value="${CFG.target['Victoria']}"></div>
     <div class="frow"><label>Prince George weekly target (5-day)</label><input type="number" id="cfg-tp" step="100" value="${CFG.target['Prince George']}"></div>
     <div class="frow"><label>Flag labor % above</label><input type="number" id="cfg-lw" step="5" value="${Math.round(CFG.laborWarn*100)}"> %</div>
     <div class="frow" style="margin-top:16px"><button class="btn" id="cfg-save">Save</button><button class="btn" id="cfg-reset" style="margin-left:8px">Reset to defaults</button><span id="cfg-msg" class="muted"></span></div>
   </div>
-  <div class="panel"><h3>How targets work</h3><p class="muted" style="margin:0">Each tech's weekly target is the 5-day figure above, pro-rated by days worked (e.g. 3 days = 3/5 of target). Spread = revenue − target; commission is paid on positive spread only.</p></div>`;
+  <div class="panel"><h3>How it works</h3><p class="muted" style="margin:0">Each tech's weekly target is the 5-day figure, pro-rated by days worked (3 days = 3/5). Spread = revenue − target; commission is that unit's % of positive spread. Base pay = hours × the hourly rate (by location or per employee). Only staff tagged as technicians appear on the Technician tab.</p></div>`;
 }
 
 const VIEWS={tech:viewTech,sales:viewSales,marketing:viewMarketing,regional:viewRegional,settings:viewSettings};
@@ -364,9 +418,15 @@ function render(){
   $('#week').parentElement; document.querySelector('label[for=week]').style.display=$('#week').style.display=(PAGE==='regional')?'none':'';
 }
 function bindSettings(){
+  const mode=$('#cfg-ratemode');
+  mode.onchange=()=>{ const emp=mode.value==='employee'; $('#rate-employee').classList.toggle('hidden',!emp); $('#rate-location').classList.toggle('hidden',emp); };
   $('#cfg-save').onclick=()=>{
-    CFG.hourlyRate=+$('#cfg-rate').value||DEFAULTS.hourlyRate;
-    CFG.commissionPct=(+$('#cfg-com').value||17)/100;
+    CFG.rateMode=mode.value;
+    CFG.rateLoc['Victoria']=+$('#cfg-rv').value||DEFAULTS.rateLoc['Victoria'];
+    CFG.rateLoc['Prince George']=+$('#cfg-rp').value||DEFAULTS.rateLoc['Prince George'];
+    CFG.rateEmp={}; document.querySelectorAll('.cfg-emp').forEach(i=>{ const v=parseFloat(i.value); if(v>0) CFG.rateEmp[i.dataset.name]=v; });
+    CFG.commissionPct['Victoria']=(+$('#cfg-cv').value||20)/100;
+    CFG.commissionPct['Prince George']=(+$('#cfg-cp').value||17.5)/100;
     CFG.target['Victoria']=+$('#cfg-tv').value||DEFAULTS.target['Victoria'];
     CFG.target['Prince George']=+$('#cfg-tp').value||DEFAULTS.target['Prince George'];
     CFG.laborWarn=(+$('#cfg-lw').value||60)/100;
@@ -392,7 +452,27 @@ function initBadge(){
   else { b.className='badge sample'; b.textContent='No data yet — run the sync'; }
   $('#synced').textContent = DATA.syncedAt ? ('Synced '+DATA.syncedAt) : '';
 }
-function boot(){ initControls(); initBadge(); render(); }
+function wireSync(){
+  const btn=$('#syncNow'); if(!btn || typeof window.__SCORECARD_API!=='string') return;
+  const base=window.__SCORECARD_API.replace('&format=json','').replace('format=json','');
+  const statusUrl=base+'&format=status', reqUrl=base+'&action=request-sync';
+  btn.classList.remove('hidden');
+  btn.onclick=async()=>{
+    const before=DATA.syncedAt||''; btn.disabled=true; const msg=$('#synced');
+    msg.textContent='Sync requested… pulling from Jobber/GHL (up to a couple minutes)';
+    try{ await fetch(reqUrl,{method:'POST'}); }catch(e){}
+    let tries=0; const poll=setInterval(async()=>{
+      tries++;
+      try{ const s=await (await fetch(statusUrl)).json();
+        if(s.syncedAt && s.syncedAt!==before){ clearInterval(poll);
+          const d=await (await fetch(window.__SCORECARD_API)).json(); if(d&&d.tech){ DATA=d; }
+          initBadge(); render(); btn.disabled=false; msg.textContent='Synced '+(DATA.syncedAt||''); }
+      }catch(e){}
+      if(tries>60){ clearInterval(poll); btn.disabled=false; msg.textContent='Still syncing — refresh shortly. (Your PC must be on for the pull.)'; }
+    },5000);
+  };
+}
+function boot(){ initControls(); initBadge(); wireSync(); render(); }
 $('#foot').innerHTML=`<b>Sources:</b> production revenue, hours, tips, quotes &amp; bookings from <b>Jobber</b>; lead counts from <b>GoHighLevel</b>. Targets, hourly rate, commission % and ad spend are set on the Settings tab (not in the source systems). Metrics are recomputed here — close rate, avg ticket and ROI are calculated live, so the sheet's formula issues don't carry over.`;
 
 // Dual-mode boot: hosted (GitHub Pages) sets window.__SCORECARD_API to the
