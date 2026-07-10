@@ -169,6 +169,14 @@ const uClass=u=>u==='Victoria'?'v':'p';
 const uTag=u=>u?`<span class="u ${uClass(u)}">${u==='Prince George'?'PG':'Victoria'}</span>`:'';
 function fmtWeek(w){ if(!w) return ''; const d=new Date(w+'T00:00:00'); return d.toLocaleDateString('en-CA',{month:'short',day:'2-digit'}); }
 function fmtWeekY(w){ if(!w) return ''; const d=new Date(w+'T00:00:00'); return d.toLocaleDateString('en-CA',{month:'short',day:'2-digit',year:'numeric'}); }
+// Weeks run Monday (the key) through the following Sunday, inclusive.
+function weekEndDate(w){ const d=new Date(w+'T00:00:00'); d.setDate(d.getDate()+6); return d; }
+function fmtWeekRange(w){ if(!w) return ''; const s=new Date(w+'T00:00:00'), e=weekEndDate(w), o={month:'short',day:'2-digit'};
+  return s.toLocaleDateString('en-CA',o)+' – '+e.toLocaleDateString('en-CA',o)+', '+e.getFullYear(); }
+function fmtWeekSpan(w){ if(!w) return ''; const s=new Date(w+'T00:00:00'), e=weekEndDate(w);
+  const sm=s.toLocaleDateString('en-CA',{month:'short'}), em=e.toLocaleDateString('en-CA',{month:'short'});
+  const sd=('0'+s.getDate()).slice(-2), ed=('0'+e.getDate()).slice(-2);
+  return sm===em ? `${sm} ${sd}–${ed}` : `${sm} ${sd} – ${em} ${ed}`; }
 function monthOf(w){ const d=new Date(w+'T00:00:00'); return d.toLocaleDateString('en-CA',{month:'long',year:'numeric'}); }
 
 // ---------- derived per-tech-week ----------
@@ -228,7 +236,7 @@ function viewTech(){
   const tRev=rows.reduce((s,r)=>s+r.revenue,0), tPay=rows.reduce((s,r)=>s+r.totalPay,0), tTips=rows.reduce((s,r)=>s+r.tips,0);
   const labor=tRev>0?tPay/tRev:null;
   let html=`<div class="grid">
-    ${card('Revenue (production)',money(tRev), week==='all'?'all weeks':fmtWeekY(week))}
+    ${card('Revenue (production)',money(tRev), week==='all'?'all weeks':fmtWeekRange(week))}
     ${card('Total pay',money(tPay),'base + commission + tips')}
     ${card('Labor %',pct(labor), labor>CFG.laborWarn?'above target':'', labor>CFG.laborWarn?'bad':'good')}
     ${card('Tips',money(tTips))}
@@ -243,7 +251,7 @@ function viewTech(){
     html+=`<tr>
       <td class="l">${r.name||'—'}</td>
       ${unit==='all'?`<td class="l">${uTag(r.unit)}</td>`:''}
-      ${week==='all'?`<td class="l muted">${fmtWeek(r.week)}</td>`:''}
+      ${week==='all'?`<td class="l muted">${fmtWeekSpan(r.week)}</td>`:''}
       <td>${r.days||'—'}</td>
       <td class="${r.hours>HOURS_MAX?'flag':''}" ${r.hours>HOURS_MAX?'title="Unusually high — likely a missed clock-out in Jobber"':''}>${h1(r.hours)}</td>
       <td>${noRev?'<span class="flag" title="Hours logged but no revenue attributed — check Jobber assignment">'+money(r.revenue)+'</span>':money(r.revenue)}</td>
@@ -281,7 +289,7 @@ function viewSales(){
   const tJobs=rows.reduce((s,r)=>s+(+r.jobsBooked||0),0), tRev=rows.reduce((s,r)=>s+(+r.revenueSold||0),0);
   const close=tQ>0?tJobs/tQ:null, avg=tJobs>0?tRev/tJobs:null, conv=tLeads>0?tQ/tLeads:null;
   let html=`<div class="grid">
-    ${card('Revenue sold',money(tRev), week==='all'?'all weeks':fmtWeekY(week))}
+    ${card('Revenue sold',money(tRev), week==='all'?'all weeks':fmtWeekRange(week))}
     ${card('Leads',tLeads,'from GHL')}
     ${card('Conversion',pct(conv),'quotes sent ÷ leads')}
     ${card('Close rate',pct(close),'booked ÷ quotes sent')}
@@ -292,7 +300,7 @@ function viewSales(){
     <th>Leads</th><th>Quotes sent</th><th>Conversion %</th><th>Jobs booked</th><th>Close %</th><th>Revenue sold</th><th>Avg ticket</th>
     </tr></thead><tbody>`;
   for(const r of rows){
-    html+=`<tr><td class="l">${fmtWeek(r.week)}</td>${unit==='all'?`<td class="l">${uTag(r.unit)}</td>`:''}
+    html+=`<tr><td class="l">${fmtWeekSpan(r.week)}</td>${unit==='all'?`<td class="l">${uTag(r.unit)}</td>`:''}
       <td>${r.leads||'—'}</td><td>${r.quotesSent||'—'}</td><td>${pct(r.convRate)}</td><td>${r.jobsBooked||'—'}</td>
       <td>${pct(r.closeRate)}</td><td>${money(r.revenueSold)}</td><td>${money(r.avgTicket)}</td></tr>`;
   }
@@ -332,9 +340,9 @@ function viewMarketing(){
       <td>${roi==null?'—':roi.toFixed(2)+'×'}</td><td>${money(cac)}</td></tr>`;
   }
   const convT=tLeads>0?tQ/tLeads:null, cplT=tLeads>0&&tSpend>0?tSpend/tLeads:null, roiT=tSpend>0?tRev/tSpend:null, cacT=tClosed>0&&tSpend>0?tSpend/tClosed:null;
-  let html=`<div class="infobar">Broken down by <b>lead source</b> (anything containing “Facebook” is grouped together). All from <b>Jobber</b> by the lead source it tags: leads = requests, quotes sent = quotes report, closed &amp; revenue = one-off jobs. Ad spend isn't in Jobber — ${week==='all'?'pick a specific week to enter it':'enter it per source below'} (saved in your browser); CPL, ROI and CAC then calculate automatically.</div>`;
+  let html=`<div class="infobar">Broken down by <b>lead source</b> (anything containing “Facebook” is grouped together). All from <b>Jobber</b> by the lead source it tags: leads = requests, quotes sent = quotes report, closed = one-off jobs, revenue = approved quotes. Ad spend isn't in Jobber — ${week==='all'?'pick a specific week to enter it':'enter it per source below'} (saved in your browser); CPL, ROI and CAC then calculate automatically.</div>`;
   html+=`<div class="grid">
-    ${card('Leads',tLeads, week==='all'?'all weeks':fmtWeekY(week))}
+    ${card('Leads',tLeads, week==='all'?'all weeks':fmtWeekRange(week))}
     ${card('Conversion',pct(convT),'quotes sent ÷ leads')}
     ${card('Ad spend',money(tSpend))}
     ${card('ROI', roiT==null?'—':roiT.toFixed(2)+'×','revenue ÷ spend', roiT>=3?'good':(roiT!=null?'bad':''))}
@@ -437,7 +445,7 @@ function bindSettings(){
 
 function initControls(){
   const ws=weeks();
-  const sel=$('#week'); sel.innerHTML='<option value="all">All weeks</option>'+ws.slice().reverse().map(w=>`<option value="${w}">${fmtWeekY(w)}</option>`).join('');
+  const sel=$('#week'); sel.innerHTML='<option value="all">All weeks</option>'+ws.slice().reverse().map(w=>`<option value="${w}">${fmtWeekRange(w)}</option>`).join('');
   if(ws.length) sel.value=ws[ws.length-1];
   $('#unit').addEventListener('change',render);
   $('#week').addEventListener('change',render);
