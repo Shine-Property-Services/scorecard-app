@@ -332,7 +332,7 @@ function viewMarketing(){
       <td>${roi==null?'—':roi.toFixed(2)+'×'}</td><td>${money(cac)}</td></tr>`;
   }
   const convT=tLeads>0?tQ/tLeads:null, cplT=tLeads>0&&tSpend>0?tSpend/tLeads:null, roiT=tSpend>0?tRev/tSpend:null, cacT=tClosed>0&&tSpend>0?tSpend/tClosed:null;
-  let html=`<div class="infobar">Broken down by <b>lead source</b> (anything containing “Facebook” is grouped together). Leads, quotes sent and closed come from <b>GHL</b>; revenue is from <b>Jobber</b> approved quotes by the lead source it tags. Ad spend isn't in either system — ${week==='all'?'pick a specific week to enter it':'enter it per source below'} (saved in your browser); CPL, ROI and CAC then calculate automatically.</div>`;
+  let html=`<div class="infobar">Broken down by <b>lead source</b> (anything containing “Facebook” is grouped together). All from <b>Jobber</b> by the lead source it tags: leads = requests, quotes sent = quotes report, closed &amp; revenue = one-off jobs. Ad spend isn't in Jobber — ${week==='all'?'pick a specific week to enter it':'enter it per source below'} (saved in your browser); CPL, ROI and CAC then calculate automatically.</div>`;
   html+=`<div class="grid">
     ${card('Leads',tLeads, week==='all'?'all weeks':fmtWeekY(week))}
     ${card('Conversion',pct(convT),'quotes sent ÷ leads')}
@@ -473,7 +473,7 @@ function wireSync(){
   };
 }
 function boot(){ initControls(); initBadge(); wireSync(); render(); }
-$('#foot').innerHTML=`<b>Sources:</b> production revenue, hours, tips, quotes &amp; bookings from <b>Jobber</b>; lead counts from <b>GoHighLevel</b>. Targets, hourly rate, commission % and ad spend are set on the Settings tab (not in the source systems). Metrics are recomputed here — close rate, avg ticket and ROI are calculated live, so the sheet's formula issues don't carry over.`;
+$('#foot').innerHTML=`<b>Sources (all Jobber):</b> leads = Request report (created), quotes = Quotes report (sent), jobs closed &amp; revenue sold = one-off Jobs report (created); technician revenue = one-off jobs (scheduled), hours = timesheets, tips = invoices (paid). Targets, hourly rate, commission % and ad spend are set on the Settings tab. Close rate, avg ticket and ROI are computed here, so the sheet's formula issues don't carry over.`;
 
 // Dual-mode boot: hosted (GitHub Pages) sets window.__SCORECARD_API to the
 // gated function URL -> fetch JSON; otherwise use the local data.js payload.
