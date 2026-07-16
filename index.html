@@ -138,7 +138,8 @@ const DEFAULTS = {
   rateLoc:  { "Victoria": 32.5, "Prince George": 32.5 }, // base pay "all in" $/hr by unit
   rateEmp:  {},                                          // { "Caleb Mcpherson": 34, ... } per-employee overrides
   commissionPct: { "Victoria": 0.20, "Prince George": 0.175 }, // matches payroll (20% Vic / 17.5% PG)
-  target: { "Victoria": 6500, "Prince George": 6000 },   // full-week (5-day) revenue target, pro-rated by days
+  target: { "Victoria": 6500, "Prince George": 6000 },   // full-week revenue target, pro-rated by days worked
+  workDays: { "Victoria": 5, "Prince George": 4 },        // full work week length per unit (PG = 4-day week)
   laborWarn: 0.60
 };
 function lsGet(k,f){ try{ const v=localStorage.getItem(k); return v==null?f:JSON.parse(v); }catch(e){ return f; } }
@@ -149,6 +150,7 @@ CFG.rateLoc = Object.assign({}, DEFAULTS.rateLoc, CFG.rateLoc||{});
 CFG.rateEmp = Object.assign({}, CFG.rateEmp||{});
 if(typeof CFG.commissionPct==='number') CFG.commissionPct={...DEFAULTS.commissionPct}; // migrate old flat value
 CFG.commissionPct = Object.assign({}, DEFAULTS.commissionPct, CFG.commissionPct||{});
+CFG.workDays = Object.assign({}, DEFAULTS.workDays, CFG.workDays||{});
 function rateFor(name,unit){
   if(CFG.rateMode==='employee'){ const r=CFG.rateEmp[normName(name)]; if(r!=null&&r!=='') return +r; }
   return +CFG.rateLoc[unit] || 0;
@@ -183,7 +185,8 @@ function monthOf(w){ const d=new Date(w+'T00:00:00'); return d.toLocaleDateStrin
 function techCalc(r){
   const days=+r.days||0, hours=+r.hours||0, revenue=+r.revenue||0, tips=+r.tips||0;
   const full = CFG.target[r.unit] || CFG.target['Victoria'];
-  const target = days>0 ? full*Math.min(days,5)/5 : 0;
+  const wd = CFG.workDays[r.unit] || 5;                 // PG runs a 4-day week
+  const target = days>0 ? full*Math.min(days,wd)/wd : 0;
   const spread = revenue - target;
   const comRev = Math.max(spread,0);
   const comDollars = comRev*comPctFor(r.unit);
@@ -402,12 +405,12 @@ function viewSettings(){
     <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
     <div class="frow"><label>Commission % — Victoria</label><input type="number" id="cfg-cv" step="0.5" value="${+(CFG.commissionPct['Victoria']*100).toFixed(1)}"> %</div>
     <div class="frow"><label>Commission % — Prince George</label><input type="number" id="cfg-cp" step="0.5" value="${+(CFG.commissionPct['Prince George']*100).toFixed(1)}"> %</div>
-    <div class="frow"><label>Victoria weekly target (5-day)</label><input type="number" id="cfg-tv" step="100" value="${CFG.target['Victoria']}"></div>
-    <div class="frow"><label>Prince George weekly target (5-day)</label><input type="number" id="cfg-tp" step="100" value="${CFG.target['Prince George']}"></div>
+    <div class="frow"><label>Victoria full-week target</label><input type="number" id="cfg-tv" step="100" value="${CFG.target['Victoria']}"> over <input type="number" id="cfg-wv" step="1" min="1" max="7" style="width:52px" value="${CFG.workDays['Victoria']}"> days</div>
+    <div class="frow"><label>Prince George full-week target</label><input type="number" id="cfg-tp" step="100" value="${CFG.target['Prince George']}"> over <input type="number" id="cfg-wp" step="1" min="1" max="7" style="width:52px" value="${CFG.workDays['Prince George']}"> days</div>
     <div class="frow"><label>Flag labor % above</label><input type="number" id="cfg-lw" step="5" value="${Math.round(CFG.laborWarn*100)}"> %</div>
     <div class="frow" style="margin-top:16px"><button class="btn" id="cfg-save">Save</button><button class="btn" id="cfg-reset" style="margin-left:8px">Reset to defaults</button><span id="cfg-msg" class="muted"></span></div>
   </div>
-  <div class="panel"><h3>How it works</h3><p class="muted" style="margin:0">Each tech's weekly target is the 5-day figure, pro-rated by days worked (3 days = 3/5). Spread = revenue − target; commission is that unit's % of positive spread. Base pay = hours × the hourly rate (by location or per employee). Only staff tagged as technicians appear on the Technician tab.</p></div>`;
+  <div class="panel"><h3>How it works</h3><p class="muted" style="margin:0">Each tech's weekly target is the full-week figure, pro-rated by days worked over that unit's work week (Victoria 5-day, Prince George 4-day — so a PG tech working 4 days gets the full target; 2 days = half). Spread = revenue − target; commission is that unit's % of positive spread. Base pay = hours × the hourly rate (by location or per employee). Only staff tagged as technicians appear on the Technician tab.</p></div>`;
 }
 
 const VIEWS={tech:viewTech,sales:viewSales,marketing:viewMarketing,regional:viewRegional,settings:viewSettings};
@@ -437,6 +440,8 @@ function bindSettings(){
     CFG.commissionPct['Prince George']=(+$('#cfg-cp').value||17.5)/100;
     CFG.target['Victoria']=+$('#cfg-tv').value||DEFAULTS.target['Victoria'];
     CFG.target['Prince George']=+$('#cfg-tp').value||DEFAULTS.target['Prince George'];
+    CFG.workDays['Victoria']=+$('#cfg-wv').value||DEFAULTS.workDays['Victoria'];
+    CFG.workDays['Prince George']=+$('#cfg-wp').value||DEFAULTS.workDays['Prince George'];
     CFG.laborWarn=(+$('#cfg-lw').value||60)/100;
     lsSet('shine_score_cfg',CFG); $('#cfg-msg').textContent='Saved ✓';
   };
