@@ -66,6 +66,13 @@
   .barrow .bt{flex:1;background:var(--headbg);border-radius:5px;height:20px;overflow:hidden}
   .barrow .bt span{display:block;height:100%;background:linear-gradient(90deg,var(--navy),var(--blue))}
   .barrow .bv{width:82px;text-align:right;font-variant-numeric:tabular-nums}
+  button.drill{background:none;border:1px solid var(--line);color:var(--blue);border-radius:6px;width:22px;height:22px;line-height:1;font-size:11px;cursor:pointer;margin-right:7px;padding:0;vertical-align:middle}
+  button.drill:hover{border-color:var(--blue)}
+  tr.jobs-row td{background:#f7f9fb;padding:0}
+  .jobs-detail{padding:10px 14px}
+  .jobs-cap{font-size:11px;color:var(--mut);margin:0 0 6px}
+  table.sub{min-width:0;margin:0;border:1px solid var(--line)}
+  table.sub th,table.sub td{padding:6px 10px;font-size:12.5px}
   @media(max-width:600px){.frow label{width:150px}}
 </style>
 </head>
@@ -179,6 +186,19 @@ function fmtWeekSpan(w){ if(!w) return ''; const s=new Date(w+'T00:00:00'), e=we
   const sm=s.toLocaleDateString('en-CA',{month:'short'}), em=e.toLocaleDateString('en-CA',{month:'short'});
   const sd=('0'+s.getDate()).slice(-2), ed=('0'+e.getDate()).slice(-2);
   return sm===em ? `${sm} ${sd}–${ed}` : `${sm} ${sd} – ${em} ${ed}`; }
+function fmtD(s){ if(!s) return '—'; const d=new Date(s+'T00:00:00'); return isNaN(d)?s:d.toLocaleDateString('en-CA',{month:'short',day:'2-digit',year:'numeric'}); }
+// per-technician job drill-down (from DATA.jobs, one row per one-off job)
+function jobRows(name,week,unit){ return (DATA.jobs||[]).filter(j=> j.unit===unit && j.week===week && (j.techs||[]).some(t=>normName(t)===name)).sort((a,b)=>(''+(a.scheduled||'')).localeCompare(''+(b.scheduled||''))); }
+function jobsTableHTML(name,week,unit){
+  const js=jobRows(name,week,unit);
+  if(!js.length) return '<div class="muted" style="padding:8px">No individual jobs found for this week.</div>';
+  let tot=0, rows='';
+  for(const j of js){ tot+=+j.amount||0; const split=(j.techs&&j.techs.length>1)?` <span class="muted" title="shared by ${j.techs.length} technicians">÷${j.techs.length}</span>`:'';
+    rows+=`<tr><td class="l">${j.client||'—'}${j.jobNumber?` <span class="muted">#${j.jobNumber}</span>`:''}</td><td class="l">${j.address||'—'}</td><td>${fmtD(j.created)}</td><td>${fmtD(j.scheduled)}</td><td>${fmtD(j.closed)}</td><td>${money(j.amount)}${split}</td></tr>`; }
+  return `<p class="jobs-cap">${js.length} job${js.length>1?'s':''} scheduled this week · amount is the full job value (÷N = shared evenly between techs for the scorecard revenue)</p>`+
+    `<div style="overflow-x:auto"><table class="sub"><thead><tr><th class="l">Client</th><th class="l">Address</th><th>Created</th><th>Scheduled</th><th>Closed</th><th>Amount</th></tr></thead><tbody>${rows}</tbody>`+
+    `<tfoot><tr><td class="l">Total</td><td></td><td></td><td></td><td></td><td>${money(tot)}</td></tr></tfoot></table></div>`;
+}
 function monthOf(w){ const d=new Date(w+'T00:00:00'); return d.toLocaleDateString('en-CA',{month:'long',year:'numeric'}); }
 
 // ---------- derived per-tech-week ----------
@@ -252,7 +272,7 @@ function viewTech(){
   for(const r of rows){
     const noRev = r.revenue===0 && (r.hours>0||r.days>0);
     html+=`<tr>
-      <td class="l">${r.name||'—'}</td>
+      <td class="l"><button class="drill" title="Show the jobs behind this" data-name="${r.name}" data-week="${r.week}" data-unit="${r.unit}">▸</button>${r.name||'—'}</td>
       ${unit==='all'?`<td class="l">${uTag(r.unit)}</td>`:''}
       ${week==='all'?`<td class="l muted">${fmtWeekSpan(r.week)}</td>`:''}
       <td>${r.days||'—'}</td>
@@ -265,7 +285,8 @@ function viewTech(){
       <td>${r.tips>0?money(r.tips):'—'}</td>
       <td>${money(r.totalPay)}</td>
       <td class="${r.laborPct>CFG.laborWarn?'flag':''}">${pct(r.laborPct)}</td>
-    </tr>`;
+    </tr>
+    <tr class="jobs-row hidden"><td colspan="13"><div class="jobs-detail"></div></td></tr>`;
   }
   html+=`</tbody><tfoot><tr><td class="l">Total</td>${unit==='all'?'<td></td>':''}${week==='all'?'<td></td>':''}
     <td></td><td>${h1(rows.reduce((s,r)=>s+r.hours,0))}</td><td>${money(tRev)}</td><td></td><td></td>
@@ -421,6 +442,14 @@ function render(){
   document.querySelectorAll('input.spend').forEach(inp=>inp.addEventListener('change',e=>{
     const k=e.target.dataset.key, v=parseFloat(e.target.value);
     if(!v||v<=0) delete SPEND[k]; else SPEND[k]=v; lsSet('shine_score_spend',SPEND); render();
+  }));
+  // technician job drill-down toggles
+  document.querySelectorAll('button.drill').forEach(b=>b.addEventListener('click',ev=>{
+    ev.preventDefault();
+    const dr=b.closest('tr').nextElementSibling; if(!dr||!dr.classList.contains('jobs-row')) return;
+    const div=dr.querySelector('.jobs-detail');
+    if(dr.classList.contains('hidden')){ if(!div.dataset.filled){ div.innerHTML=jobsTableHTML(b.dataset.name,b.dataset.week,b.dataset.unit); div.dataset.filled='1'; } dr.classList.remove('hidden'); b.textContent='▾'; }
+    else { dr.classList.add('hidden'); b.textContent='▸'; }
   }));
   if(PAGE==='settings') bindSettings();
   // week/unit controls hidden on settings
