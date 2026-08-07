@@ -364,7 +364,7 @@ function viewMarketing(){
       <td>${roi==null?'—':roi.toFixed(2)+'×'}</td><td>${money(cac)}</td></tr>`;
   }
   const convT=tLeads>0?tQ/tLeads:null, cplT=tLeads>0&&tSpend>0?tSpend/tLeads:null, roiT=tSpend>0?tRev/tSpend:null, cacT=tClosed>0&&tSpend>0?tSpend/tClosed:null;
-  let html=`<div class="infobar">Broken down by <b>lead source</b> (anything containing “Facebook” is grouped together). All from <b>Jobber</b> by the lead source it tags: leads = requests, quotes sent = quotes report, closed = one-off jobs, revenue = approved quotes. Ad spend isn't in Jobber — ${week==='all'?'pick a specific week to enter it':'enter it per source below'} (saved in your browser); CPL, ROI and CAC then calculate automatically.</div>`;
+  let html=`<div class="infobar">Broken down by <b>lead source</b> (anything containing “Facebook” is grouped together). All from <b>Jobber</b> by the lead source it tags: leads = requests, quotes sent = quotes report, closed &amp; revenue = one-off jobs (job-created) — so this reconciles with the Sales tab. Ad spend isn't in Jobber — ${week==='all'?'pick a specific week to enter it':'enter it per source below'} (saved in your browser); CPL, ROI and CAC then calculate automatically.</div>`;
   html+=`<div class="grid">
     ${card('Leads',tLeads, week==='all'?'all weeks':fmtWeekRange(week))}
     ${card('Conversion',pct(convT),'quotes sent ÷ leads')}
